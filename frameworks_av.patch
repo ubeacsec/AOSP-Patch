@@ -1,0 +1,374 @@
+Copyright 2016 Yanick Fratantonio
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+diff --git a/services/audioflinger/AudioFlinger.cpp b/services/audioflinger/AudioFlinger.cpp
+index 9ec5802..c85d641 100644
+--- a/services/audioflinger/AudioFlinger.cpp
++++ b/services/audioflinger/AudioFlinger.cpp
+@@ -1443,6 +1443,7 @@ sp<IAudioRecord> AudioFlinger::openRecord(
+     sp<Client> client;
+     status_t lStatus;
+     int lSessionId;
++    bool canRecordUltraSound;
+ 
+     cblk.clear();
+     buffers.clear();
+@@ -1454,6 +1455,10 @@ sp<IAudioRecord> AudioFlinger::openRecord(
+         goto Exit;
+     }
+ 
++    // check permission to record ultrasound
++    canRecordUltraSound = recordingUltraSoundAllowed();
++    ALOGE("TESTFILTER: ULTRASOUND permission: %s", canRecordUltraSound ? "granted" : "denied");
++
+     // further sample rate checks are performed by createRecordTrack_l()
+     if (sampleRate == 0) {
+         ALOGE("openRecord() invalid sample rate %u", sampleRate);
+@@ -1501,7 +1506,7 @@ sp<IAudioRecord> AudioFlinger::openRecord(
+         // TODO: the uid should be passed in as a parameter to openRecord
+         recordTrack = thread->createRecordTrack_l(client, sampleRate, format, channelMask,
+                                                   frameCount, lSessionId, notificationFrames,
+-                                                  clientUid, flags, tid, &lStatus);
++                                                  clientUid, flags, tid, &lStatus, canRecordUltraSound);
+         LOG_ALWAYS_FATAL_IF((lStatus == NO_ERROR) && (recordTrack == 0));
+ 
+         if (lStatus == NO_ERROR) {
+diff --git a/services/audioflinger/RecordTracks.h b/services/audioflinger/RecordTracks.h
+index 25d6d95..b76282d 100644
+--- a/services/audioflinger/RecordTracks.h
++++ b/services/audioflinger/RecordTracks.h
+@@ -32,7 +32,8 @@ public:
+                                 int sessionId,
+                                 int uid,
+                                 IAudioFlinger::track_flags_t flags,
+-                                track_type type);
++                                track_type type,
++                                bool canRecordUltraSound);
+     virtual             ~RecordTrack();
+     virtual status_t    initCheck() const;
+ 
+@@ -83,6 +84,8 @@ private:
+ 
+             // used by the record thread to convert frames to proper destination format
+             RecordBufferConverter              *mRecordBufferConverter;
++
++            bool                                mCanRecordUltraSound;
+ };
+ 
+ // playback track, used by PatchPanel
+diff --git a/services/audioflinger/ServiceUtilities.cpp b/services/audioflinger/ServiceUtilities.cpp
+index 2e68dad..5a20442 100644
+--- a/services/audioflinger/ServiceUtilities.cpp
++++ b/services/audioflinger/ServiceUtilities.cpp
+@@ -97,6 +97,21 @@ bool recordingAllowed(const String16& opPackageName) {
+     return true;
+ }
+ 
++bool recordingUltraSoundAllowed() {
++    // Check for ultrasound!
++
++    static const String16 sRecordUltraSoundAudio("android.permission.RECORD_ULTRASOUND_AUDIO");
++
++    const bool ok = checkCallingPermission(sRecordUltraSoundAudio);
++    if (!ok) {
++        ALOGE("TESTFILTER Request requires android.permission.RECORD_ULTRASOUND_AUDIO");
++        return false;
++    }
++    ALOGE("TESTFILTER RECORD_ULTRASOUND_AUDIO permission granted");
++
++    return true;
++}
++
+ bool captureAudioOutputAllowed() {
+     if (getpid_cached == IPCThreadState::self()->getCallingPid()) return true;
+     static const String16 sCaptureAudioOutput("android.permission.CAPTURE_AUDIO_OUTPUT");
+diff --git a/services/audioflinger/ServiceUtilities.h b/services/audioflinger/ServiceUtilities.h
+index fba6dce..b0402ba 100644
+--- a/services/audioflinger/ServiceUtilities.h
++++ b/services/audioflinger/ServiceUtilities.h
+@@ -21,6 +21,7 @@ namespace android {
+ extern pid_t getpid_cached;
+ 
+ bool recordingAllowed(const String16& opPackageName);
++bool recordingUltraSoundAllowed();
+ bool captureAudioOutputAllowed();
+ bool captureHotwordAllowed();
+ bool settingsAllowed();
+diff --git a/services/audioflinger/Threads.cpp b/services/audioflinger/Threads.cpp
+index 0a7d4a2..245a683 100644
+--- a/services/audioflinger/Threads.cpp
++++ b/services/audioflinger/Threads.cpp
+@@ -20,6 +20,8 @@
+ //#define LOG_NDEBUG 0
+ #define ATRACE_TAG ATRACE_TAG_AUDIO
+ 
++#define FILTER_PI 3.141592653589793
++
+ #include "Configuration.h"
+ #include <math.h>
+ #include <fcntl.h>
+@@ -5602,6 +5604,7 @@ void AudioFlinger::RecordThread::onFirstRef()
+ bool AudioFlinger::RecordThread::threadLoop()
+ {
+     nsecs_t lastWarning = 0;
++    ALOGE("TESTFILTER start of threadLoop");
+ 
+     inputStandBy();
+ 
+@@ -5915,6 +5918,14 @@ reacquire_wakelock:
+                 framesOut = activeTrack->mRecordBufferConverter->convert(
+                         activeTrack->mSink.raw, activeTrack->mResamplerBufferProvider, framesOut);
+ 
++                if (!activeTrack->mCanRecordUltraSound) {
++                    // this app does not have permission to record ultrasound. Filter.
++                    //ALOGE("TESTFILTER this app can NOT record ultra sound. Filter.");
++                    activeTrack->mRecordBufferConverter->apply_low_pass(activeTrack->mSink.raw, framesOut);
++                } else {
++                    //ALOGE("TESTFILTER this app CAN record ultra sound. Do not filter.");
++                }
++
+                 if (framesOut > 0 && (overrun == OVERRUN_UNKNOWN)) {
+                     overrun = OVERRUN_FALSE;
+                 }
+@@ -6045,7 +6056,8 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
+         int uid,
+         IAudioFlinger::track_flags_t *flags,
+         pid_t tid,
+-        status_t *status)
++        status_t *status,
++        bool canRecordUltraSound)
+ {
+     size_t frameCount = *pFrameCount;
+     sp<RecordTrack> track;
+@@ -6126,7 +6138,7 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
+ 
+         track = new RecordTrack(this, client, sampleRate,
+                       format, channelMask, frameCount, NULL, sessionId, uid,
+-                      *flags, TrackBase::TYPE_DEFAULT);
++                      *flags, TrackBase::TYPE_DEFAULT, canRecordUltraSound);
+ 
+         lStatus = track->initCheck();
+         if (lStatus != NO_ERROR) {
+@@ -6529,6 +6541,134 @@ AudioFlinger::RecordThread::RecordBufferConverter::~RecordBufferConverter() {
+     delete mInputConverterProvider;
+ }
+ 
++void AudioFlinger::RecordThread::RecordBufferConverter::apply_low_pass(void *buffer, size_t frames)
++{
++    //ALOGE("TESTFILTER start of apply_low_pass");
++    //ALOGE("TESTFILTER mSrcSampleRate: %u, mDstSampleRate: %u", mSrcSampleRate, mDstSampleRate);
++    //ALOGE("TESTFILTER mSrcFormat: %#x, mDstFormat: %#x", mSrcFormat, mDstFormat);
++    //ALOGE("TESTFILTER mBufFrames: %u, mBufFrameSize: %#x", mBufFrames, mBufFrameSize);
++    //ALOGE("TESTFILTER mSrcChannelCount: %u, mDstChannelCount: %u", mSrcChannelCount, mDstChannelCount);
++    //ALOGE("TESTFILTER audio_bytes_per_sample(mSrcFormat): %u", audio_bytes_per_sample(mSrcFormat));
++    //ALOGE("TESTFILTER audio_bytes_per_sample(mDstFormat): %u", audio_bytes_per_sample(mDstFormat));
++    //ALOGE("TESTFILTER frames: %u", frames);
++
++    if (!mFilterIsInited) {
++        ALOGE("TESTFILTER initing filter.");
++
++        // Fs: sample rate
++        // F0: the cutting frequency
++        // Q: attenuation in Db
++
++        uint32_t fs;
++        double f0 = 0;
++        double dbGain = 0;
++        double Q = 0;
++        double w0 = 0;
++        double c = 0;
++        double s = 0;
++        double alpha = 0;
++        double A = 0;
++        double As = 0;
++        double a0 = 0;
++
++        if (0) { // low pass
++            // args for filter
++            fs = mDstSampleRate;
++            f0 = 17000;
++            Q = 80.0;
++
++            // precomputation
++            w0 = 2*FILTER_PI*f0/fs;
++            c = cos(w0);
++            s = sin(w0);
++            alpha = s/(2*Q);
++
++            // parameters
++            a0 = 1 + alpha;
++            mFilterA1 = -2 * c; mFilterA1 /= a0;
++            mFilterA2 = 1 - alpha; mFilterA2 /= a0;
++            mFilterB0 = (1 - c)/2; mFilterB0 /= a0;
++            mFilterB1 = 1 - c; mFilterB1 /= a0;
++            mFilterB2 = (1 - c)/2; mFilterB2 /= a0;
++        } else if (1) { // high shelf
++            // args for filter
++            fs = mDstSampleRate;
++            f0 = 17500; // 18000
++            Q = 1; // S = 1
++            dbGain = -120.0; // -70
++
++            // precomputation
++            A = pow(10, dbGain/40);
++            As = sqrt(A);
++            w0 = 2*FILTER_PI*f0/fs;
++            c = cos(w0);
++            s = sin(w0);
++            alpha = s/(2*Q);
++
++            // parameters
++            a0 = (A+1) - (A-1)*c + 2*As*alpha;
++            mFilterA1 = 2*( (A-1) - (A+1)*c ); mFilterA1 /= a0;
++            mFilterA2 = (A+1) - (A-1)*c - 2*As*alpha; mFilterA2 /= a0;
++            mFilterB0 = A*( (A+1) + (A-1)*c + 2*As*alpha ); mFilterB0 /= a0;
++            mFilterB1 = -2*A*( (A-1) + (A+1)*c ); mFilterB1 /= a0;
++            mFilterB2 = A*( (A+1) + (A-1)*c -2*As*alpha ); mFilterB2 /= a0;
++        } else {
++            ALOGE("TESTFILTER ERROR no filter specified");
++        }
++
++        ALOGE("TESTFILTER fs: %u", fs);
++        ALOGE("TESTFILTER f0: %u", f0);
++        ALOGE("TESTFILTER dbGain: %G", dbGain);
++        ALOGE("TESTFILTER Q: %G", Q);
++        ALOGE("TESTFILTER w0: %G", w0);
++        ALOGE("TESTFILTER c: %G", c);
++        ALOGE("TESTFILTER s: %G", s);
++        ALOGE("TESTFILTER alpha: %G", alpha);
++        ALOGE("TESTFILTER A: %G", A);
++        ALOGE("TESTFILTER As: %G", As);
++        ALOGE("TESTFILTER a0: %G", a0);
++        ALOGE("TESTFILTER mFilterB0: %G", mFilterB0);
++        ALOGE("TESTFILTER mFilterB1: %G", mFilterB1);
++        ALOGE("TESTFILTER mFilterB2: %G", mFilterB2);
++        ALOGE("TESTFILTER mFilterA1: %G", mFilterA1);
++        ALOGE("TESTFILTER mFilterA2: %G", mFilterA2);
++
++        mFilterX1 = 0;
++        mFilterX2 = 0;
++        mFilterY1 = 0;
++        mFilterY2 = 0;
++
++        mFilterIsInited = true;
++    }
++
++    size_t frames_num = frames * mDstChannelCount;
++    signed short *buf = (signed short *) buffer; // FIXME this should depend re. format size
++    unsigned char *buf_bytes = (unsigned char *) buffer;
++    for (size_t i = 0; i < frames_num; i++) {
++        // for debugging
++        signed short in_us = buf[i];
++        //unsigned char in_byte_0 = buf_bytes[i];
++        //unsigned char in_byte_1 = buf_bytes[i+1];
++
++        double x = (double) buf[i];
++        double y = mFilterB0 * x + mFilterB1 * mFilterX1 + mFilterB2 * mFilterX2 - mFilterA1 * mFilterY1 - mFilterA2 * mFilterY2;
++        mFilterX2 = mFilterX1;
++        mFilterX1 = x;
++        mFilterY2 = mFilterY1;
++        mFilterY1 = y;
++        buf[i] = (signed short) (y*0.90);
++
++        //buf[i] = sin(((double) (1000.0 * (2 * FILTER_PI) * i)) / mDstSampleRate) * 30000; // signal at 1KHz
++        //buf[i] = (signed short) (((double) buf[i]) * 2);
++        //ALOGE("TESTFILTER values: IN_US: %d, IN_byte_0: %u, IN_byte_1: %u, OUT_US: %d, x: %G, y: %G",
++                //in_us, in_byte_0, in_byte_1, buf[i], x, y);
++    }
++    //ALOGE("TESTFILTER frames_num: %u", frames_num);
++    //ALOGE("TESTFILTER buffer: %p", buffer);
++    //ALOGE("TESTFILTER buf[0]: %p", &(buf[0]));
++    //ALOGE("TESTFILTER buf[frames_num]: %p", &(buf[frames_num]));
++}
++
+ size_t AudioFlinger::RecordThread::RecordBufferConverter::convert(void *dst,
+         AudioBufferProvider *provider, size_t frames)
+ {
+diff --git a/services/audioflinger/Threads.h b/services/audioflinger/Threads.h
+index 46ac300..6f4cbc0 100644
+--- a/services/audioflinger/Threads.h
++++ b/services/audioflinger/Threads.h
+@@ -1138,6 +1138,9 @@ public:
+          */
+         size_t convert(void *dst, AudioBufferProvider *provider, size_t frames);
+ 
++        // apply low pass filter to suppress high-frequency components
++        void apply_low_pass(void *buffer, size_t frames);
++
+         // returns NO_ERROR if constructor was successful
+         status_t initCheck() const {
+             // mSrcChannelMask set on successful updateParameters
+@@ -1191,6 +1194,19 @@ public:
+         bool                 mRequiresFloat;    // data processing requires float (e.g. resampler)
+         PassthruBufferProvider *mInputConverterProvider;    // converts input to float
+         int8_t               mIdxAry[sizeof(uint32_t) * 8]; // used for channel mask conversion
++
++        // low_pass filter fields
++        bool mFilterIsInited = false;
++        double mFilterX1 = 0;
++        double mFilterX2 = 0;
++        double mFilterY1 = 0;
++        double mFilterY2 = 0;
++
++        double mFilterA1 = 0;
++        double mFilterA2 = 0;
++        double mFilterB0 = 0;
++        double mFilterB1 = 0;
++        double mFilterB2 = 0;
+     };
+ 
+ #include "RecordTracks.h"
+@@ -1237,7 +1253,8 @@ public:
+                     int uid,
+                     IAudioFlinger::track_flags_t *flags,
+                     pid_t tid,
+-                    status_t *status /*non-NULL*/);
++                    status_t *status /*non-NULL*/,
++                    bool canRecordUltraSound);
+ 
+             status_t    start(RecordTrack* recordTrack,
+                               AudioSystem::sync_event_t event,
+diff --git a/services/audioflinger/Tracks.cpp b/services/audioflinger/Tracks.cpp
+index f7da209..271ad2a 100644
+--- a/services/audioflinger/Tracks.cpp
++++ b/services/audioflinger/Tracks.cpp
+@@ -1942,7 +1942,8 @@ AudioFlinger::RecordThread::RecordTrack::RecordTrack(
+             int sessionId,
+             int uid,
+             IAudioFlinger::track_flags_t flags,
+-            track_type type)
++            track_type type,
++            bool canRecordUltraSound)
+     :   TrackBase(thread, client, sampleRate, format,
+                   channelMask, frameCount, buffer, sessionId, uid,
+                   flags, false /*isOut*/,
+@@ -1953,7 +1954,8 @@ AudioFlinger::RecordThread::RecordTrack::RecordTrack(
+         mOverflow(false),
+         mFramesToDrop(0),
+         mResamplerBufferProvider(NULL), // initialize in case of early constructor exit
+-        mRecordBufferConverter(NULL)
++        mRecordBufferConverter(NULL),
++        mCanRecordUltraSound(canRecordUltraSound)
+ {
+     if (mCblk == NULL) {
+         return;
+@@ -2121,7 +2123,7 @@ AudioFlinger::RecordThread::PatchRecord::PatchRecord(RecordThread *recordThread,
+                                                      void *buffer,
+                                                      IAudioFlinger::track_flags_t flags)
+     :   RecordTrack(recordThread, NULL, sampleRate, format, channelMask, frameCount,
+-                buffer, 0, getuid(), flags, TYPE_PATCH),
++                buffer, 0, getuid(), flags, TYPE_PATCH, false),
+                 mProxy(new ClientProxy(mCblk, mBuffer, frameCount, mFrameSize, false, true))
+ {
+     uint64_t mixBufferNs = ((uint64_t)2 * recordThread->frameCount() * 1000000000) /

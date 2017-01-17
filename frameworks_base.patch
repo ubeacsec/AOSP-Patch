@@ -1,0 +1,83 @@
+Copyright 2016 Yanick Fratantonio
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+diff --git a/api/current.txt b/api/current.txt
+index d7fdb2d..318400b 100644
+--- a/api/current.txt
++++ b/api/current.txt
+@@ -105,6 +105,7 @@ package android {
+     field public static final java.lang.String RECEIVE_SMS = "android.permission.RECEIVE_SMS";
+     field public static final java.lang.String RECEIVE_WAP_PUSH = "android.permission.RECEIVE_WAP_PUSH";
+     field public static final java.lang.String RECORD_AUDIO = "android.permission.RECORD_AUDIO";
++    field public static final java.lang.String RECORD_ULTRASOUND_AUDIO = "android.permission.RECORD_ULTRASOUND_AUDIO";
+     field public static final java.lang.String REORDER_TASKS = "android.permission.REORDER_TASKS";
+     field public static final java.lang.String REQUEST_IGNORE_BATTERY_OPTIMIZATIONS = "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS";
+     field public static final java.lang.String REQUEST_INSTALL_PACKAGES = "android.permission.REQUEST_INSTALL_PACKAGES";
+diff --git a/api/system-current.txt b/api/system-current.txt
+index 3c88e59..6a6a8b4 100644
+--- a/api/system-current.txt
++++ b/api/system-current.txt
+@@ -174,6 +174,7 @@ package android {
+     field public static final java.lang.String RECEIVE_WAP_PUSH = "android.permission.RECEIVE_WAP_PUSH";
+     field public static final java.lang.String RECEIVE_WIFI_CREDENTIAL_CHANGE = "android.permission.RECEIVE_WIFI_CREDENTIAL_CHANGE";
+     field public static final java.lang.String RECORD_AUDIO = "android.permission.RECORD_AUDIO";
++    field public static final java.lang.String RECORD_ULTRASOUND_AUDIO = "android.permission.RECORD_ULTRASOUND_AUDIO";
+     field public static final java.lang.String RECOVERY = "android.permission.RECOVERY";
+     field public static final java.lang.String REGISTER_CALL_PROVIDER = "android.permission.REGISTER_CALL_PROVIDER";
+     field public static final java.lang.String REGISTER_CONNECTION_MANAGER = "android.permission.REGISTER_CONNECTION_MANAGER";
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index 99e55bf..bd99b5e 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -692,6 +692,15 @@
+         android:description="@string/permdesc_recordAudio"
+         android:protectionLevel="dangerous"/>
+ 
++    <!-- Allows an application to record ultrasound audio.
++         <p>Protection level: dangerous
++    -->
++    <permission android:name="android.permission.RECORD_ULTRASOUND_AUDIO"
++        android:permissionGroup="android.permission-group.MICROPHONE"
++        android:label="@string/permlab_recordUltraSoundAudio"
++        android:description="@string/permdesc_recordUltraSoundAudio"
++        android:protectionLevel="dangerous"/>
++
+     <!-- ====================================================================== -->
+     <!-- Permissions for accessing the device camera                            -->
+     <!-- ====================================================================== -->
+diff --git a/core/res/res/values/strings.xml b/core/res/res/values/strings.xml
+index d9fa287..96436a3 100644
+--- a/core/res/res/values/strings.xml
++++ b/core/res/res/values/strings.xml
+@@ -970,6 +970,11 @@
+       without your confirmation.</string>
+ 
+     <!-- Title of an application permission, listed so the user can choose whether they want to allow the application to do this. -->
++    <string name="permlab_recordUltraSoundAudio">record ultrasound audio</string>
++    <!-- Description of an application permission, listed so the user can choose whether they want to allow the application to do this. -->
++    <string name="permdesc_recordUltraSoundAudio">Allows the app to record ultrasound audio and potentially track you. Scary stuff.</string>
++
++    <!-- Title of an application permission, listed so the user can choose whether they want to allow the application to do this. -->
+     <string name="permlab_sim_communication">sim communication</string>
+     <!-- Description of an application permission, listed so the user can choose whether they want to allow the application to do this. -->
+     <string name="permdesc_sim_communication">Allows the app to send commands to the SIM. This is very dangerous.</string>
+@@ -1913,7 +1918,7 @@
+     <string name="lockscreen_access_pattern_cleared">Pattern cleared</string>
+     <!-- Accessibility description sent when user adds a dot to the pattern. [CHAR LIMIT=NONE]  -->
+     <string name="lockscreen_access_pattern_cell_added">Cell added</string>
+-    <!-- Accessibility description sent when user adds a dot to the pattern. Announces the 
++    <!-- Accessibility description sent when user adds a dot to the pattern. Announces the
+     actual cell when headphones are connected [CHAR LIMIT=NONE]  -->
+     <string name="lockscreen_access_pattern_cell_added_verbose">
+             Cell <xliff:g id="cell_index" example="3">%1$s</xliff:g> added</string>
